@@ -10,10 +10,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    database_url: str = "postgresql+asyncpg://meeting:meeting@localhost:5432/meeting_intel"
+    database_url: str = "postgresql+asyncpg://meeting:meeting@localhost:5433/meeting_intel"
     jwt_secret: str = "dev-only-change-me-use-a-long-random-secret"
     jwt_exp_minutes: int = 60 * 12
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001"
     allow_registration: bool = False
 
     admin_email: str = "admin@rigora.local"
