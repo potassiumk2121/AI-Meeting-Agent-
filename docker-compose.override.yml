@@ -1,0 +1,11 @@
+# This machine already has another service on 127.0.0.1:8000.
+# Publish this API on 8001 as well and point the dashboard at it.
+services:
+  backend:
+    ports:
+      - "8001:8000"
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://127.0.0.1:8001
