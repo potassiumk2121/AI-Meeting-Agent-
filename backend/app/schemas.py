@@ -147,6 +147,11 @@ class MeetingDetail(BaseModel):
     email: EmailOut | None
 
 
+class SpeakerRename(BaseModel):
+    from_name: str
+    to_name: str
+
+
 class IngestOut(BaseModel):
     duplicate: bool = False
     segment: SegmentOut | None = None

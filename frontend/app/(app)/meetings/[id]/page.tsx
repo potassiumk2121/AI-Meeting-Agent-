@@ -38,6 +38,7 @@ export default function MeetingPage() {
   const [warning, setWarning] = useState("");
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [pendingClips, setPendingClips] = useState(0);
   const [speaker, setSpeaker] = useState("");
   const [line, setLine] = useState("");
   const [chat, setChat] = useState("");
@@ -110,25 +111,25 @@ export default function MeetingPage() {
 
   async function sendLine(event: FormEvent) {
     event.preventDefault();
-    if (!speaker.trim() || !line.trim()) return;
+    if (!line.trim()) return;
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       setError("Join the meeting before sending a line.");
       return;
     }
-    socket.send(JSON.stringify({ type: "utterance", speaker, text: line }));
+    socket.send(JSON.stringify({ type: "utterance", speaker: speaker.trim() || "Person A", text: line }));
     setLine("");
   }
 
   async function sendChat(event: FormEvent) {
     event.preventDefault();
-    if (!speaker.trim() || !chat.trim()) return;
+    if (!chat.trim()) return;
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       setError("Join the meeting before sending chat.");
       return;
     }
-    socket.send(JSON.stringify({ type: "chat", sender: speaker, text: chat }));
+    socket.send(JSON.stringify({ type: "chat", sender: speaker.trim() || "Person A", text: chat }));
     setChat("");
   }
 
@@ -137,10 +138,6 @@ export default function MeetingPage() {
       stopMic.current = true;
       if (recorderRef.current && recorderRef.current.state !== "inactive") recorderRef.current.stop();
       setRecording(false);
-      return;
-    }
-    if (!speaker.trim()) {
-      setError("Enter the speaker name before using the microphone.");
       return;
     }
     if (detail?.meeting.status !== "live") await join();
@@ -152,17 +149,18 @@ export default function MeetingPage() {
     setError("");
     const loop = async () => {
       while (!stopMic.current) {
-        const blob = await recordClip(stream, recorderRef, 5000);
-        if (blob && blob.size > 1500) {
+        const blob = await recordClip(stream, recorderRef, 2000);
+        if (blob && blob.size > 800) {
           const body = new FormData();
           body.append("file", blob, "chunk.webm");
-          body.append("speaker", speaker.trim());
+          setPendingClips((count) => count + 1);
           void api(`/api/meetings/${id}/audio`, { method: "POST", body })
             .then(() => load())
             .catch((err: unknown) => {
               const message = err instanceof Error ? err.message : "Audio failed";
               if (!message.toLowerCase().includes("no speech")) setError(message);
-            });
+            })
+            .finally(() => setPendingClips((count) => Math.max(0, count - 1)));
         }
       }
       stream.getTracks().forEach((track) => track.stop());
@@ -222,6 +220,17 @@ export default function MeetingPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function renameSpeaker(fromName: string, toName: string) {
+    const next = toName.trim();
+    if (!next || next === fromName) return;
+    setError("");
+    await api(`/api/meetings/${id}/speakers`, {
+      method: "PATCH",
+      body: JSON.stringify({ from_name: fromName, to_name: next }),
+    });
+    await load();
   }
 
   async function remove() {
@@ -306,12 +315,14 @@ export default function MeetingPage() {
                 <article key={segment.id} className="grid gap-2 border-t border-stone-100 pt-3 md:grid-cols-[88px_1fr_1fr] md:gap-3">
                   <div className="text-xs text-stone-500">{segment.timestamp_label}</div>
                   <div>
-                    <div className="text-sm font-semibold">{segment.speaker_name}</div>
+                    <SpeakerName name={segment.speaker_name} onRename={(from, to) => renameSpeaker(from, to)} />
                     <p className="text-xs uppercase tracking-wide text-stone-400 md:hidden">Original</p>
                     <p className="text-sm leading-6 text-stone-800">{segment.original_text}</p>
                   </div>
                   <div>
-                    <div className="hidden text-sm font-semibold md:block">{segment.speaker_name}</div>
+                    <div className="hidden md:block">
+                      <SpeakerName name={segment.speaker_name} onRename={(from, to) => renameSpeaker(from, to)} />
+                    </div>
                     <p className="text-xs uppercase tracking-wide text-stone-400 md:hidden">English</p>
                     <p className="text-sm leading-6 text-stone-800">{segment.english_text}</p>
                   </div>
@@ -327,23 +338,30 @@ export default function MeetingPage() {
               ))}
               <div ref={endRef} />
             </div>
-            {live && (
+            {(live || meeting.status === "scheduled") && (
               <div className="mt-4 space-y-3 border-t border-stone-100 pt-4">
-                <TextInput value={speaker} onChange={(event) => setSpeaker(event.target.value)} placeholder="Speaker name" />
-                <form className="flex gap-2" onSubmit={sendLine}>
-                  <TextArea value={line} onChange={(event) => setLine(event.target.value)} placeholder="Paste a spoken line" rows={2} />
-                  <Button type="submit">Send</Button>
-                </form>
-                <form className="flex gap-2" onSubmit={sendChat}>
-                  <TextInput value={chat} onChange={(event) => setChat(event.target.value)} placeholder="Chat message" />
-                  <Button type="submit" variant="secondary">
-                    Chat
-                  </Button>
-                </form>
+                {live && (
+                  <>
+                    <form className="flex gap-2" onSubmit={sendLine}>
+                      <TextArea value={line} onChange={(event) => setLine(event.target.value)} placeholder="Paste a spoken line" rows={2} />
+                      <Button type="submit">Send</Button>
+                    </form>
+                    <form className="flex gap-2" onSubmit={sendChat}>
+                      <TextInput value={chat} onChange={(event) => setChat(event.target.value)} placeholder="Chat message" />
+                      <Button type="submit" variant="secondary">
+                        Chat
+                      </Button>
+                    </form>
+                  </>
+                )}
                 <Button type="button" variant="secondary" onClick={() => toggleMic().catch((err: unknown) => setError(err instanceof Error ? err.message : "Microphone failed"))}>
                   {recording ? "Stop microphone" : "Start microphone"}
                 </Button>
-                {recording && <p className="text-xs text-stone-500">Listening. Each few seconds of audio is transcribed and translated into English.</p>}
+                <p className="text-xs text-stone-500">
+                  {recording
+                    ? `Listening through the laptop speaker. Voices are labeled Person A, Person B as they appear.${pendingClips > 0 ? " Translating…" : ""}`
+                    : "Play the meeting on the laptop speakers, then start the microphone. Click a Person A or Person B label to rename it."}
+                </p>
               </div>
             )}
           </Card>
@@ -382,8 +400,8 @@ export default function MeetingPage() {
             <div className="mt-3 space-y-2">
               {speakerShares(detail.segments).map((row) => (
                 <div key={row.name}>
-                  <div className="flex justify-between text-xs text-stone-600">
-                    <span>{row.name}</span>
+                  <div className="flex justify-between gap-2 text-xs text-stone-600">
+                    <SpeakerName name={row.name} onRename={(from, to) => renameSpeaker(from, to)} />
                     <span>{row.lines} lines · {Math.round(row.share * 100)}%</span>
                   </div>
                   <div className="mt-1 h-1.5 rounded bg-stone-100">
@@ -457,6 +475,54 @@ export default function MeetingPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+function SpeakerName({ name, onRename }: { name: string; onRename: (from: string, to: string) => Promise<void> }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(name);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!editing) setValue(name);
+  }, [name, editing]);
+
+  async function save() {
+    setSaving(true);
+    try {
+      await onRename(name, value);
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <span className="inline-flex items-center gap-1">
+        <TextInput
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              void save();
+            }
+          }}
+          className="h-8 w-36"
+          aria-label={`Rename ${name}`}
+        />
+        <button type="button" className="text-xs font-semibold text-teal-800" disabled={saving} onClick={() => void save()}>
+          Save
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <button type="button" className="text-left text-sm font-semibold text-stone-900 hover:underline" onClick={() => setEditing(true)}>
+      {name}
+    </button>
   );
 }
 

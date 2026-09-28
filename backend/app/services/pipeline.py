@@ -37,11 +37,11 @@ from app.schemas import (
 )
 from app.services.connectors import ensure_transcript_subscription, pull_for_meeting
 from app.services.extract import actions_from_utterance, classify_sentiment
+from app.services.speech import transcribe_speakers
 from app.services.pdf_report import ReportData, build_pdf
 from app.services.rag import reindex
-from app.services.speech import transcribe
 from app.services.summarize import analyze
-from app.services.translate import to_english
+from app.services.translate import language_code, to_english
 from app.timeutil import file_date, format_date, format_stamp, utcnow
 
 logger = logging.getLogger(__name__)
@@ -265,6 +265,7 @@ async def ingest_utterance(
     timestamp_label: str | None,
     source: str,
     dedupe: bool = False,
+    english: str | None = None,
 ) -> IngestOut:
     meeting = await _get_meeting(session, meeting_id)
     await _open_for_ingest(meeting)
@@ -285,7 +286,11 @@ async def ingest_utterance(
         if existing.first():
             return IngestOut(duplicate=True, sentiment=meeting.sentiment)
 
-    english, detected = await to_english(text, language)
+    if english and english.strip():
+        detected = language_code(text, language)
+        english = english.strip()[:8000]
+    else:
+        english, detected = await to_english(text, language)
     person = await _participant(session, meeting_id, speaker)
     sequence = (
         await session.execute(
@@ -387,18 +392,98 @@ async def ingest_audio(
     speaker: str,
     language: str | None,
 ) -> IngestOut:
-    text, detected = await transcribe(audio, filename, content_type, language)
-    if not text:
+    recent_rows = (
+        await session.execute(
+            select(TranscriptSegment)
+            .where(TranscriptSegment.meeting_id == meeting_id)
+            .order_by(TranscriptSegment.sequence.desc())
+            .limit(4)
+        )
+    ).scalars().all()
+    recent = [(row.speaker_name, row.original_text) for row in reversed(recent_rows)]
+    known = list(dict.fromkeys(row.speaker_name for row in recent_rows))
+    forced = speaker.strip()
+    turns = await transcribe_speakers(audio, content_type, known, recent)
+    if forced:
+        turns = [
+            type(turn)(speaker=forced, text=turn.text, language=turn.language, english=turn.english)
+            for turn in turns
+        ]
+    if not turns:
         raise AppError("No speech detected in that audio clip.", 422)
-    return await ingest_utterance(
-        session,
-        meeting_id,
-        speaker=speaker,
-        text=text,
-        language=detected or language,
-        timestamp_label=None,
-        source="audio",
-    )
+    last: IngestOut | None = None
+    for turn in turns:
+        last = await ingest_utterance(
+            session,
+            meeting_id,
+            speaker=turn.speaker,
+            text=turn.text,
+            language=turn.language or language,
+            timestamp_label=None,
+            source="audio",
+            english=turn.english or None,
+        )
+    return last or IngestOut()
+
+
+async def rename_speaker(session: AsyncSession, meeting_id: uuid.UUID, from_name: str, to_name: str) -> MeetingDetail:
+    source = from_name.strip()
+    target = to_name.strip()[:200]
+    if not source or not target:
+        raise AppError("Enter the current name and the new name.", 400)
+    if source == target:
+        return await get_meeting_detail(session, meeting_id)
+    await _get_meeting(session, meeting_id)
+    segments = (
+        await session.execute(
+            select(TranscriptSegment).where(
+                TranscriptSegment.meeting_id == meeting_id,
+                TranscriptSegment.speaker_name == source,
+            )
+        )
+    ).scalars().all()
+    actions = (
+        await session.execute(
+            select(ActionItem).where(ActionItem.meeting_id == meeting_id, ActionItem.assignee_name == source)
+        )
+    ).scalars().all()
+    chats = (
+        await session.execute(
+            select(ChatMessage).where(ChatMessage.meeting_id == meeting_id, ChatMessage.sender_name == source)
+        )
+    ).scalars().all()
+    if not segments and not actions and not chats:
+        raise AppError("That speaker is not in this meeting.", 404)
+    source_person = (
+        await session.execute(
+            select(Participant).where(Participant.meeting_id == meeting_id, Participant.name == source)
+        )
+    ).scalar_one_or_none()
+    target_person = (
+        await session.execute(
+            select(Participant).where(Participant.meeting_id == meeting_id, Participant.name == target)
+        )
+    ).scalar_one_or_none()
+    if source_person and target_person and source_person.id != target_person.id:
+        for row in segments:
+            row.participant_id = target_person.id
+            row.speaker_name = target
+        await session.delete(source_person)
+    elif source_person:
+        source_person.name = target
+        for row in segments:
+            row.speaker_name = target
+    else:
+        person = await _participant(session, meeting_id, target)
+        for row in segments:
+            row.participant_id = person.id
+            row.speaker_name = target
+    for row in actions:
+        row.assignee_name = target
+    for row in chats:
+        row.sender_name = target
+    await session.commit()
+    return await get_meeting_detail(session, meeting_id)
 
 
 async def join_meeting(session: AsyncSession, meeting_id: uuid.UUID) -> JoinOut:

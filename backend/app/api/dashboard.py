@@ -45,7 +45,7 @@ async def dashboard(
     ).scalar_one()
     recent_rows = (
         await session.execute(
-            select(Meeting).options(selectinload(Meeting.participants)).order_by(Meeting.created_at.desc()).limit(5)
+            select(Meeting).options(selectinload(Meeting.participants)).order_by(Meeting.created_at.desc()).limit(8)
         )
     ).scalars().all()
     preview_rows = (

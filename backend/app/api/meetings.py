@@ -8,7 +8,7 @@ from app.api.deps import get_db
 from app.config import get_settings
 from app.errors import AppError
 from app.models import Meeting
-from app.schemas import EmailIn, IngestOut, JoinOut, MeetingCreate, MeetingDetail, MeetingOut, SyncOut
+from app.schemas import EmailIn, IngestOut, JoinOut, MeetingCreate, MeetingDetail, MeetingOut, SpeakerRename, SyncOut
 from app.services.emailer import send_meeting_report
 from app.services.pipeline import (
     finalize,
@@ -16,6 +16,7 @@ from app.services.pipeline import (
     ingest_audio,
     join_meeting,
     list_meetings,
+    rename_speaker,
     sync_meeting,
 )
 
@@ -108,7 +109,7 @@ async def end_meeting(
 async def upload_audio(
     meeting_id: uuid.UUID,
     file: UploadFile = File(...),
-    speaker: str = Form(...),
+    speaker: str = Form(""),
     language: str | None = Form(None),
     session: AsyncSession = Depends(get_db),
 ) -> IngestOut:
@@ -126,6 +127,15 @@ async def upload_audio(
         speaker=speaker,
         language=language,
     )
+
+
+@router.patch("/{meeting_id}/speakers", response_model=MeetingDetail)
+async def rename_meeting_speaker(
+    meeting_id: uuid.UUID,
+    body: SpeakerRename,
+    session: AsyncSession = Depends(get_db),
+) -> MeetingDetail:
+    return await rename_speaker(session, meeting_id, body.from_name, body.to_name)
 
 
 @router.get("/{meeting_id}/report.pdf")
