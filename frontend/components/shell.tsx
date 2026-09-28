@@ -30,8 +30,8 @@ export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [ready, setReady] = useState(false);
   const [brand, setBrand] = useState<PublicBrand>({
-    company_name: "Meeting Intelligence",
-    company_tagline: "Live notes",
+    company_name: "RIGORA",
+    company_tagline: "Meeting Intelligence",
     brand_color: "#102033",
   });
   useEffect(() => {
@@ -47,10 +47,10 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen">
       <aside className="fixed inset-y-0 left-0 flex w-60 flex-col text-stone-100" style={{ background: brand.brand_color }}>
-        <div className="px-5 py-6">
+        <Link href="/dashboard" className="block px-5 py-6 hover:bg-white/5">
           <div className="font-serif text-2xl">{brand.company_name}</div>
           <div className="mt-1 text-xs uppercase tracking-wider text-stone-300">{brand.company_tagline}</div>
-        </div>
+        </Link>
         <nav className="flex-1 space-y-1 px-3">
           {LINKS.map((link) => {
             const active = pathname === link.href || pathname.startsWith(`${link.href}/`);

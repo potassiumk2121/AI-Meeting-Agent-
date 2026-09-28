@@ -20,7 +20,7 @@ export default function MeetingsPage() {
   return (
     <div>
       <div className="flex items-end justify-between gap-4">
-        <PageTitle title="Meetings" text="Join a Teams or Google Meet session, or run the sample dialogue." />
+        <PageTitle title="Meetings" text="Join a Microsoft Teams session." />
         <Link href="/meetings/new">
           <Button>New meeting</Button>
         </Link>
