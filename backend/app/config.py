@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +25,14 @@ class Settings(BaseSettings):
     company_tagline: str = "Meeting Intelligence"
     brand_color: str = "#102033"
     default_timezone: str = "Asia/Kolkata"
+
+    @field_validator("brand_color")
+    @classmethod
+    def brand_color_or_default(cls, value: str) -> str:
+        text = (value or "").strip()
+        if len(text) == 7 and text.startswith("#") and all(char in "0123456789abcdefABCDEF" for char in text[1:]):
+            return text
+        return "#102033"
 
     ai_provider: str = "openai"
     openai_api_key: str = ""

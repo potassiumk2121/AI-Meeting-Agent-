@@ -37,7 +37,13 @@ export function Shell({ children }: { children: ReactNode }) {
   useEffect(() => {
     fetch(`${API_URL}/api/settings/public`)
       .then((response) => response.json())
-      .then((data: PublicBrand) => setBrand(data))
+      .then((data: PublicBrand) =>
+        setBrand({
+          company_name: data.company_name || "RIGORA",
+          company_tagline: data.company_tagline || "Meeting Intelligence",
+          brand_color: data.brand_color?.trim() || "#102033",
+        }),
+      )
       .catch(() => undefined);
     setReady(true);
   }, []);
