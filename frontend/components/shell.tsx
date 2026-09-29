@@ -13,8 +13,8 @@ import {
   Users,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { ReactNode, useEffect, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { MouseEvent, ReactNode, useEffect, useState } from "react";
 
 const LINKS = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
@@ -28,7 +28,7 @@ const LINKS = [
 
 export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const [ready, setReady] = useState(false);
+  const router = useRouter();
   const [brand, setBrand] = useState<PublicBrand>({
     company_name: "Development Monitors",
     company_tagline: "AI Meeting Intelligence",
@@ -45,22 +45,24 @@ export function Shell({ children }: { children: ReactNode }) {
         }),
       )
       .catch(() => undefined);
-    setReady(true);
   }, []);
 
-  if (!ready) return <div className="p-8 text-sm text-stone-500">Loading…</div>;
+  function openHome(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    if (pathname !== "/dashboard") router.push("/dashboard");
+  }
 
   return (
-    <div className="min-h-screen">
-      <aside className="fixed inset-y-0 left-0 flex w-60 flex-col text-stone-100" style={{ background: brand.brand_color }}>
-        <Link href="/dashboard" className="block bg-white px-3 pb-3 pt-4">
-          <img src="/brand/development-monitors.jpg" alt="Development Monitors" className="h-auto w-full" />
+    <div className="min-h-screen bg-[#f6f3ee]">
+      <aside className="fixed inset-y-0 left-0 flex w-64 flex-col border-r border-stone-200/90 bg-[#f6f3ee]">
+        <Link href="/dashboard" scroll={false} onClick={openHome} className="block px-6 pb-1 pt-8">
+          <img src="/brand/development-monitors.png" alt={brand.company_name} className="h-auto w-full" />
         </Link>
-        <div className="h-1 bg-[#c46a3a]" />
-        <div className="px-5 pb-3 pt-4 text-[11px] font-medium uppercase tracking-[0.22em] text-stone-300">
+        <div className="mx-6 mt-4 h-px w-8 bg-[#c46a3a]/80" />
+        <div className="px-6 pb-6 pt-4 text-[10px] font-medium uppercase tracking-[0.22em] text-stone-400">
           {brand.company_tagline}
         </div>
-        <nav className="flex-1 space-y-1 px-3">
+        <nav className="flex-1 space-y-0.5 px-3">
           {LINKS.map((link) => {
             const active = pathname === link.href || pathname.startsWith(`${link.href}/`);
             const Icon = link.icon;
@@ -69,19 +71,19 @@ export function Shell({ children }: { children: ReactNode }) {
                 key={link.href}
                 href={link.href}
                 className={cn(
-                  "flex items-center gap-2 rounded-md px-3 py-2 text-sm",
-                  active ? "bg-white/15 text-white" : "text-stone-300 hover:bg-white/10 hover:text-white",
+                  "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm",
+                  active ? "bg-[#ebe6df] text-stone-900" : "text-stone-500 hover:bg-[#ebe6df]/70 hover:text-stone-800",
                 )}
               >
-                <Icon size={16} />
+                <Icon size={15} strokeWidth={1.75} />
                 {link.label}
               </Link>
             );
           })}
         </nav>
       </aside>
-      <main className="pl-60">
-        <div className="mx-auto max-w-6xl px-8 py-8">{children}</div>
+      <main className="pl-64">
+        <div className="mx-auto max-w-6xl px-10 py-10">{children}</div>
       </main>
     </div>
   );

@@ -24,7 +24,7 @@ export default function MeetingsPage() {
         <PageTitle className="mb-0" title="Meetings" text="Join a Microsoft Teams session." />
         <Link
           href="/meetings/new"
-          className="inline-flex shrink-0 items-center gap-2 self-start rounded-lg bg-teal-800 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-900"
+          className="inline-flex shrink-0 items-center gap-2 self-start rounded-full bg-stone-900 px-4 py-2 text-sm font-medium text-stone-50 transition hover:bg-stone-800"
         >
           <Plus size={16} strokeWidth={2.5} />
           New meeting
