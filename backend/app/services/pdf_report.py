@@ -12,7 +12,6 @@ from reportlab.platypus import (
     Frame,
     PageTemplate,
     Paragraph,
-    Spacer,
     Table,
     TableStyle,
 )
@@ -80,6 +79,12 @@ class ReportData:
     chat: list[tuple[str, str, str]] = field(default_factory=list)
 
 
+_LOGO = Path(__file__).resolve().parent.parent / "assets" / "development-monitors.jpg"
+_COPPER = HexColor("#C46A3A")
+_INK = HexColor("#243038")
+_RULE = HexColor("#D9D4CC")
+
+
 def build_pdf(data: ReportData, path: Path) -> None:
     regular, bold = _font_pair()
     brand = _brand()
@@ -89,17 +94,38 @@ def build_pdf(data: ReportData, path: Path) -> None:
     def paint(canvas, doc):
         canvas.saveState()
         width, height = A4
-        canvas.setFillColor(brand)
-        canvas.rect(0, height - 42, width, 42, fill=1, stroke=0)
         canvas.setFillColor(white)
-        canvas.setFont(bold, 11)
-        canvas.drawString(48, height - 26, settings.company_name)
-        canvas.setFont(regular, 9)
-        canvas.drawRightString(width - 48, height - 26, settings.company_tagline)
-        canvas.setFillColor(HexColor("#64748B"))
+        canvas.rect(0, 0, width, height, fill=1, stroke=0)
+        if _LOGO.exists():
+            canvas.drawImage(
+                str(_LOGO),
+                36,
+                height - 78,
+                width=228,
+                height=66,
+                preserveAspectRatio=True,
+                anchor="sw",
+                mask="auto",
+            )
+        canvas.setFillColor(_INK)
+        canvas.setFont(bold, 8)
+        canvas.drawRightString(width - 40, height - 38, "AI MEETING INTELLIGENCE")
+        canvas.setFillColor(HexColor("#8A8178"))
+        canvas.setFont(regular, 7)
+        canvas.drawRightString(width - 40, height - 50, "PLAN. DEVELOP. MONITOR.")
+        canvas.setStrokeColor(_COPPER)
+        canvas.setLineWidth(2)
+        canvas.line(36, height - 86, width - 36, height - 86)
+        canvas.setStrokeColor(_INK)
+        canvas.setLineWidth(0.4)
+        canvas.line(36, 40, width - 36, 40)
+        canvas.setFillColor(_INK)
         canvas.setFont(regular, 8)
-        canvas.drawString(48, 26, "Confidential")
-        canvas.drawRightString(width - 48, 26, f"Page {doc.page}")
+        canvas.drawString(36, 24, f"{settings.company_name} LLC")
+        canvas.setFillColor(HexColor("#8A8178"))
+        canvas.drawCentredString(width / 2, 24, "Confidential")
+        canvas.setFillColor(_INK)
+        canvas.drawRightString(width - 36, 24, f"Page {doc.page}")
         canvas.restoreState()
 
     document = BaseDocTemplate(
@@ -108,7 +134,7 @@ def build_pdf(data: ReportData, path: Path) -> None:
         title=f"{settings.company_name} — {data.title}",
         author=settings.company_name,
     )
-    frame = Frame(48, 46, A4[0] - 96, A4[1] - 100, showBoundary=0)
+    frame = Frame(40, 56, A4[0] - 80, A4[1] - 156, showBoundary=0)
     document.addPageTemplates([PageTemplate(id="main", frames=[frame], onPage=paint)])
 
     body = ParagraphStyle(
@@ -138,60 +164,82 @@ def build_pdf(data: ReportData, path: Path) -> None:
     section = ParagraphStyle(
         "Section",
         fontName=bold,
-        fontSize=12,
-        leading=16,
-        textColor=brand,
-        spaceBefore=12,
+        fontSize=11,
+        leading=14,
+        textColor=_INK,
+        spaceBefore=14,
+        spaceAfter=6,
+    )
+    kicker = ParagraphStyle(
+        "Kicker",
+        fontName=bold,
+        fontSize=8,
+        leading=10,
+        textColor=_COPPER,
         spaceAfter=4,
     )
-    meta = ParagraphStyle(
-        "Meta",
-        fontName=regular,
-        fontSize=9,
-        leading=12,
-        textColor=HexColor("#475569"),
-        spaceAfter=8,
-    )
-
     story = [
+        Paragraph("MEETING REPORT", kicker),
         Paragraph(_xml(data.title, bold), title),
-        Paragraph(
-            _xml(
-                f"{data.when_label}  ·  {data.platform}  ·  Sentiment: {data.sentiment or 'neutral'}",
-                regular,
-            ),
-            meta,
-        ),
-        Paragraph(
-            _xml("Participants: " + (", ".join(data.participants) if data.participants else "Not recorded"), regular),
-            meta,
-        ),
-        Paragraph("Executive summary", section),
+        _facts_table(data, regular, bold),
+        Paragraph("01  Executive summary", section),
         Paragraph(_xml(data.executive_summary, regular), body),
-        Paragraph("Manager summary", section),
+        Paragraph("02  Manager summary", section),
     ]
     for line in (data.manager_summary or "None recorded").splitlines():
         story.append(Paragraph(_xml(line or " ", regular), small))
 
-    story.append(Paragraph("Decisions", section))
+    story.append(Paragraph("03  Decisions", section))
     story.extend(_bullets(data.decisions, small, regular))
-    story.append(Paragraph("Risks", section))
+    story.append(Paragraph("04  Risks", section))
     story.extend(_bullets(data.risks, small, regular))
-    story.append(Paragraph("Next steps", section))
+    story.append(Paragraph("05  Next steps", section))
     story.extend(_bullets(data.next_steps, small, regular))
-    story.append(Paragraph("Action items", section))
+    story.append(Paragraph("06  Action items", section))
     story.append(_action_table(data.action_items, regular, bold, brand))
-    story.append(Paragraph("Transcript", section))
+    story.append(Paragraph("07  Transcript", section))
     story.append(_transcript_table(data.segments, regular, bold, brand))
     if data.chat:
-        story.append(Paragraph("Chat", section))
+        story.append(Paragraph("08  Chat", section))
         story.append(_chat_table(data.chat, regular, bold, brand))
     if data.detailed_summary and data.detailed_summary != data.executive_summary:
-        story.append(Paragraph("Detailed notes", section))
+        story.append(Paragraph("09  Detailed notes", section))
         for line in data.detailed_summary.splitlines():
             story.append(Paragraph(_xml(line or " ", regular), small))
 
     document.build(story)
+
+
+def _facts_table(data: ReportData, regular: str, bold: str):
+    label = ParagraphStyle("FactLabel", fontName=bold, fontSize=8, leading=11, textColor=HexColor("#8A8178"))
+    value = ParagraphStyle("FactValue", fontName=regular, fontSize=9, leading=12, textColor=_INK)
+    people = ", ".join(data.participants) if data.participants else "Not recorded"
+    pairs = [
+        ("When", data.when_label or "Not recorded"),
+        ("Platform", data.platform or "Not recorded"),
+        ("Sentiment", (data.sentiment or "neutral").capitalize()),
+        ("Participants", people),
+    ]
+    rows = [
+        [Paragraph(name.upper(), label), Paragraph(_xml(text, regular), value)]
+        for name, text in pairs
+    ]
+    table = Table(rows, colWidths=[90, 420])
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), HexColor("#F7F5F2")),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ("LINEBELOW", (0, 0), (-1, -2), 0.3, _RULE),
+                ("BOX", (0, 0), (-1, -1), 0.4, _RULE),
+            ]
+        )
+    )
+    return table
 
 
 def _bullets(items: list[str], style: ParagraphStyle, font: str) -> list:
@@ -213,7 +261,7 @@ def _table(header: list[str], rows: list[list], regular: str, bold: str, brand, 
     table.setStyle(
         TableStyle(
             [
-                ("BACKGROUND", (0, 0), (-1, 0), brand),
+                ("BACKGROUND", (0, 0), (-1, 0), _INK),
                 ("TEXTCOLOR", (0, 0), (-1, 0), white),
                 ("FONTNAME", (0, 0), (-1, 0), bold),
                 ("BACKGROUND", (0, 1), (-1, -1), HexColor("#F8FAFC")),

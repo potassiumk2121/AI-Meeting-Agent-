@@ -8,7 +8,7 @@ import { FormEvent, useState } from "react";
 
 export default function NewMeetingPage() {
   const router = useRouter();
-  const [title, setTitle] = useState("RIGORA deployment review");
+  const [title, setTitle] = useState("");
   const [joinUrl, setJoinUrl] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -39,7 +39,7 @@ export default function NewMeetingPage() {
       <form className="space-y-4 rounded-xl border border-stone-200 bg-white p-5" onSubmit={submit}>
         <label className="block text-sm">
           <span className="mb-1 block font-medium">Title</span>
-          <TextInput value={title} onChange={(event) => setTitle(event.target.value)} required />
+          <TextInput value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Meeting title" required />
         </label>
         <label className="block text-sm">
           <span className="mb-1 block font-medium">Teams join link</span>

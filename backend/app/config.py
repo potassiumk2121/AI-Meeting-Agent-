@@ -21,8 +21,8 @@ class Settings(BaseSettings):
     admin_password: str = "ChangeMe!2026"
     admin_name: str = "RIGORA Admin"
 
-    company_name: str = "RIGORA"
-    company_tagline: str = "Meeting Intelligence"
+    company_name: str = "Development Monitors"
+    company_tagline: str = "AI Meeting Intelligence"
     brand_color: str = "#102033"
     default_timezone: str = "Asia/Kolkata"
 

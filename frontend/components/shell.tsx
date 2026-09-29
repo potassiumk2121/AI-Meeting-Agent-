@@ -30,8 +30,8 @@ export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [ready, setReady] = useState(false);
   const [brand, setBrand] = useState<PublicBrand>({
-    company_name: "RIGORA",
-    company_tagline: "Meeting Intelligence",
+    company_name: "Development Monitors",
+    company_tagline: "AI Meeting Intelligence",
     brand_color: "#102033",
   });
   useEffect(() => {
@@ -39,8 +39,8 @@ export function Shell({ children }: { children: ReactNode }) {
       .then((response) => response.json())
       .then((data: PublicBrand) =>
         setBrand({
-          company_name: data.company_name || "RIGORA",
-          company_tagline: data.company_tagline || "Meeting Intelligence",
+          company_name: data.company_name || "Development Monitors",
+          company_tagline: data.company_tagline || "AI Meeting Intelligence",
           brand_color: data.brand_color?.trim() || "#102033",
         }),
       )
@@ -53,10 +53,13 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen">
       <aside className="fixed inset-y-0 left-0 flex w-60 flex-col text-stone-100" style={{ background: brand.brand_color }}>
-        <Link href="/dashboard" className="block px-5 py-6 hover:bg-white/5">
-          <div className="font-serif text-2xl">{brand.company_name}</div>
-          <div className="mt-1 text-xs uppercase tracking-wider text-stone-300">{brand.company_tagline}</div>
+        <Link href="/dashboard" className="block bg-white px-3 pb-3 pt-4">
+          <img src="/brand/development-monitors.jpg" alt="Development Monitors" className="h-auto w-full" />
         </Link>
+        <div className="h-1 bg-[#c46a3a]" />
+        <div className="px-5 pb-3 pt-4 text-[11px] font-medium uppercase tracking-[0.22em] text-stone-300">
+          {brand.company_tagline}
+        </div>
         <nav className="flex-1 space-y-1 px-3">
           {LINKS.map((link) => {
             const active = pathname === link.href || pathname.startsWith(`${link.href}/`);

@@ -103,9 +103,9 @@ export function StatusPill({ value }: { value: string }) {
   );
 }
 
-export function PageTitle({ title, text }: { title: string; text?: string }) {
+export function PageTitle({ title, text, className }: { title: string; text?: string; className?: string }) {
   return (
-    <div className="mb-6">
+    <div className={cn("mb-6", className)}>
       <h1 className="font-serif text-3xl text-stone-900">{title}</h1>
       {text && <p className="mt-1 max-w-2xl text-sm text-stone-600">{text}</p>}
     </div>

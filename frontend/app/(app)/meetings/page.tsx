@@ -1,9 +1,10 @@
 "use client";
 
-import { Button, Empty, PageTitle, Sentiment, StatusPill } from "@/components/ui";
+import { Empty, PageTitle, Sentiment, StatusPill } from "@/components/ui";
 import { api } from "@/lib/api";
 import type { Meeting } from "@/lib/types";
 import { formatWhen, platformLabel } from "@/lib/utils";
+import { Plus } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
@@ -19,10 +20,14 @@ export default function MeetingsPage() {
 
   return (
     <div>
-      <div className="flex items-end justify-between gap-4">
-        <PageTitle title="Meetings" text="Join a Microsoft Teams session." />
-        <Link href="/meetings/new">
-          <Button>New meeting</Button>
+      <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <PageTitle className="mb-0" title="Meetings" text="Join a Microsoft Teams session." />
+        <Link
+          href="/meetings/new"
+          className="inline-flex shrink-0 items-center gap-2 self-start rounded-lg bg-teal-800 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-900"
+        >
+          <Plus size={16} strokeWidth={2.5} />
+          New meeting
         </Link>
       </div>
       {error && <p className="mb-4 text-sm text-rose-700">{error}</p>}
