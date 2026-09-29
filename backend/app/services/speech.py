@@ -1,4 +1,5 @@
 import base64
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -8,7 +9,7 @@ from openai import AsyncOpenAI
 
 from app.config import get_settings
 from app.errors import AppError
-from app.services.llm import parse_json_blob
+from app.services.llm import gemini_generate, parse_json_blob
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,15 @@ class SpeechTurn:
     text: str
     language: str | None
     english: str
+    voice: str = ""
+
+
+@dataclass
+class VoiceRef:
+    label: str
+    description: str | None
+    sample: bytes | None
+    mime: str
 
 
 def canonical_speaker(raw: str, known: list[str]) -> str:
@@ -97,11 +107,33 @@ async def _openai(audio: bytes, filename: str, language: str | None) -> tuple[st
     return (result.text or "").strip(), (str(detected).split("-")[0] if detected else None)
 
 
+def _audio_mime(content_type: str | None) -> str:
+    mime = content_type.split(";")[0].strip() if content_type else "audio/webm"
+    if mime not in {"audio/webm", "audio/wav", "audio/mpeg", "audio/mp4", "audio/ogg"}:
+        mime = "audio/webm"
+    return mime
+
+
+def _audio_part(audio: bytes, content_type: str | None) -> dict:
+    return {"inline_data": {"mime_type": _audio_mime(content_type), "data": base64.b64encode(audio).decode("ascii")}}
+
+
+def _gemini_failure(status: int) -> AppError:
+    if status == 429:
+        return AppError("Gemini is rate limiting this key. The next clips will continue shortly.", 503)
+    if status in {401, 403}:
+        return AppError("Gemini rejected the API key. Check GEMINI_API_KEY.", 502)
+    if status == 400:
+        return AppError("Gemini could not read that audio clip. The next clip will continue.", 422)
+    return AppError("Gemini is busy. The next clips will continue shortly.", 503)
+
+
 async def transcribe_speakers(
     audio: bytes,
     content_type: str,
     known_speakers: list[str],
     recent: list[tuple[str, str]],
+    voices: list[VoiceRef] | None = None,
 ) -> list[SpeechTurn]:
     settings = get_settings()
     if not settings.gemini_api_key:
@@ -110,50 +142,72 @@ async def transcribe_speakers(
             return []
         speaker = known_speakers[-1] if known_speakers else "Person A"
         return [SpeechTurn(speaker=speaker, text=text, language=language, english="")]
-    mime = content_type.split(";")[0].strip() if content_type else "audio/webm"
-    if mime not in {"audio/webm", "audio/wav", "audio/mpeg", "audio/mp4", "audio/ogg"}:
-        mime = "audio/webm"
-    roster = ", ".join(known_speakers) if known_speakers else "none yet"
+    refs = list(voices or [])[:6]
+    samples = [ref for ref in refs if ref.sample]
+    described = {ref.label: ref.description for ref in refs if ref.description}
+    roster = (
+        "\n".join(f"- {label}: {described.get(label, 'no description yet')}" for label in known_speakers)
+        if known_speakers
+        else "none yet"
+    )
     history = "\n".join(f"{speaker}: {text}" for speaker, text in recent[-4:]) or "none"
     prompt = (
-        "This audio is a meeting playing through a laptop speaker. Several people may be heard. "
-        "Transcribe every spoken turn and translate each turn into English. "
-        "Label distinct voices Person A, Person B, Person C, in the order they first speak. "
-        f"Speakers already used in this meeting: {roster}. "
-        "Reuse an existing name when it is the same voice or the sentence continues that person. "
-        "Use the next unused Person letter only for a clearly different voice. "
-        f"Recent lines:\n{history}\n"
-        'Return JSON {"turns":[{"speaker":"Person A","language":"hi","text":"...","english":"..."}]}. '
+        "You are the note taker for a meeting that is playing through a laptop speaker. "
+        "Transcribe every spoken turn in the NEW CLIP and translate each turn into English. "
+        "Decide who is speaking only from the sound of the voice (gender, pitch, timbre, accent, pace), "
+        "never from the words or from who spoke last. "
+        f"Speakers already heard in this meeting:\n{roster}\n"
+        + (
+            "Before the new clip you also get a short voice sample of known speakers. "
+            "Compare every voice in the new clip against those samples and descriptions. "
+            if samples
+            else ""
+        )
+        + "For each turn, first write voice: a short description of that voice, then pick speaker: "
+        "the known label whose voice matches, or the next unused label (Person A, Person B, Person C, ...) "
+        "if it matches none. A male and a female voice are always different speakers. "
+        "Two different voices must never share a label. Start a new turn whenever the voice changes. "
+        f"Recent lines, for spelling and context only:\n{history}\n"
+        'Return JSON {"turns":[{"voice":"adult male, low pitch, Indian English accent","speaker":"Person A",'
+        '"language":"hi","text":"...","english":"..."}]}. '
         "language is ISO 639-1. text is the original speech. english is the English translation, "
-        "or a copy of text when the speech is already English. If there is no speech, return {\"turns\":[]}."
+        "or a copy of text when the speech is already English. If the new clip has no speech, return {\"turns\":[]}."
     )
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{settings.gemini_model}:generateContent"
-    )
+    parts: list[dict] = [{"text": prompt}]
+    for ref in samples:
+        parts.append({"text": f"Voice sample of {ref.label}:"})
+        parts.append(_audio_part(ref.sample, ref.mime))
+    parts.append({"text": "NEW CLIP:"})
+    parts.append(_audio_part(audio, content_type))
     payload = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {"text": prompt},
-                    {"inline_data": {"mime_type": mime, "data": base64.b64encode(audio).decode("ascii")}},
-                ],
-            }
-        ],
+        "contents": [{"role": "user", "parts": parts}],
         "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
     }
-    async with httpx.AsyncClient(timeout=25) as client:
-        response = await client.post(url, params={"key": settings.gemini_api_key}, json=payload)
+    response = await gemini_generate(payload, timeout=30)
     if response.status_code >= 400:
-        logger.warning("gemini speaker transcription failed with status %s", response.status_code)
-        raise AppError("Gemini could not transcribe that audio.", 502)
+        logger.warning(
+            "gemini speaker transcription failed with status %s: %s",
+            response.status_code,
+            response.text[:300],
+        )
+        raise _gemini_failure(response.status_code)
     try:
-        raw = response.json()["candidates"][0]["content"]["parts"][0]["text"]
-        data = parse_json_blob(raw)
+        body = response.json()
+        candidate = (body.get("candidates") or [{}])[0]
+        content_parts = (candidate.get("content") or {}).get("parts") or []
+        if not content_parts:
+            logger.info("gemini returned no content (finish reason %s)", candidate.get("finishReason"))
+            return []
+        raw = (content_parts[0].get("text") or "").strip()
+        if not raw:
+            return []
+        if raw.startswith("["):
+            data = {"turns": json.loads(raw)}
+        else:
+            data = parse_json_blob(raw)
     except Exception as exc:
         logger.exception("gemini speaker transcription response was not usable")
-        raise AppError("Gemini could not transcribe that audio.", 502) from exc
+        raise AppError("Gemini returned an unreadable answer for that clip. The next clip will continue.", 422) from exc
     turns = data.get("turns") if isinstance(data, dict) else None
     if not isinstance(turns, list):
         text = str((data or {}).get("text") or "").strip() if isinstance(data, dict) else ""
@@ -181,19 +235,15 @@ async def transcribe_speakers(
             used.append(speaker)
         language = str(item.get("language") or "").strip().lower().split("-")[0][:16] or None
         english = str(item.get("english") or "").strip()
-        parsed.append(SpeechTurn(speaker=speaker, text=text[:8000], language=language, english=english[:8000]))
+        voice = str(item.get("voice") or "").strip()[:300]
+        parsed.append(
+            SpeechTurn(speaker=speaker, text=text[:8000], language=language, english=english[:8000], voice=voice)
+        )
     return parsed
 
 
 async def _gemini(audio: bytes, content_type: str) -> tuple[str, str | None]:
-    settings = get_settings()
-    mime = content_type.split(";")[0].strip() if content_type else "audio/webm"
-    if mime not in {"audio/webm", "audio/wav", "audio/mpeg", "audio/mp4", "audio/ogg"}:
-        mime = "audio/webm"
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{settings.gemini_model}:generateContent"
-    )
+    mime = _audio_mime(content_type)
     prompt = (
         "Transcribe the speech in this audio. Detect the spoken language. Do not translate. "
         'Return JSON {"language":"en","text":"..."} where language is an ISO 639-1 code. '
@@ -211,11 +261,10 @@ async def _gemini(audio: bytes, content_type: str) -> tuple[str, str | None]:
         ],
         "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
     }
-    async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.post(url, params={"key": settings.gemini_api_key}, json=payload)
+    response = await gemini_generate(payload, timeout=60)
     if response.status_code >= 400:
         logger.warning("gemini transcription failed with status %s", response.status_code)
-        raise AppError("Gemini could not transcribe that audio.", 502)
+        raise _gemini_failure(response.status_code)
     try:
         raw = response.json()["candidates"][0]["content"]["parts"][0]["text"]
         data = parse_json_blob(raw)

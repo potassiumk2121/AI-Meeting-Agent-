@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import DateTime, ForeignKey, LargeBinary, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -108,6 +108,22 @@ class Participant(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     meeting: Mapped[Meeting] = relationship(back_populates="participants")
+
+
+class SpeakerProfile(Base):
+    __tablename__ = "speaker_profiles"
+    __table_args__ = (UniqueConstraint("meeting_id", "label", name="uq_speaker_profile_meeting_label"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    meeting_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("meetings.id", ondelete="CASCADE"), index=True
+    )
+    label: Mapped[str] = mapped_column(String(32))
+    display_name: Mapped[str] = mapped_column(String(200))
+    voice: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    sample: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    sample_mime: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class TranscriptSegment(Base):

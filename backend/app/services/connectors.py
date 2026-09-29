@@ -137,10 +137,18 @@ async def _pull_teams(meeting) -> PullResult:
                 params={"$filter": f"JoinWebUrl eq '{safe}'"},
             )
             if response.status_code >= 400:
-                return PullResult(None, [], "Graph could not resolve that Teams link. Live ingest is still open.")
+                return PullResult(
+                    None,
+                    [],
+                    "The official Teams transcript is not available for this link. Microphone notes still work.",
+                )
             values = response.json().get("value") or []
             if not values:
-                return PullResult(None, [], "No Teams meeting matched that join link. Live ingest is still open.")
+                return PullResult(
+                    None,
+                    [],
+                    "No Teams meeting matched that join link. Microphone notes still work.",
+                )
             external_id = values[0].get("id")
         if not external_id:
             return PullResult(None, [], "Live session is open. Paste a join link to pull the Teams transcript.")

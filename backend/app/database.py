@@ -26,6 +26,7 @@ async def init_db() -> None:
         CREATE INDEX IF NOT EXISTS ix_embedding_chunks_fts
         ON embedding_chunks USING gin (to_tsvector('english', content))
         """,
+        "ALTER TABLE speaker_profiles ADD COLUMN IF NOT EXISTS voice VARCHAR(300)",
     ):
         try:
             async with engine.begin() as conn:

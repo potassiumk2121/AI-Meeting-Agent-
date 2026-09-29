@@ -22,6 +22,8 @@ type LiveMessage = {
   chat?: MeetingDetail["chat"][number];
 };
 
+const CLIP_MS = 4000;
+
 const LEGEND = [
   ["positive", "Progress, no material risk"],
   ["neutral", "Status update"],
@@ -36,6 +38,7 @@ export default function MeetingPage() {
   const [detail, setDetail] = useState<MeetingDetail | null>(null);
   const [error, setError] = useState("");
   const [warning, setWarning] = useState("");
+  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [pendingClips, setPendingClips] = useState(0);
@@ -142,23 +145,31 @@ export default function MeetingPage() {
     }
     if (detail?.meeting.status !== "live") await join();
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true },
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true },
     });
     stopMic.current = false;
     setRecording(true);
     setError("");
+    let failures = 0;
     const loop = async () => {
       while (!stopMic.current) {
-        const blob = await recordClip(stream, recorderRef, 2000);
-        if (blob && blob.size > 800) {
+        const blob = await recordClip(stream, recorderRef, CLIP_MS);
+        if (blob && blob.size > 1500) {
           const body = new FormData();
           body.append("file", blob, "chunk.webm");
           setPendingClips((count) => count + 1);
           void api(`/api/meetings/${id}/audio`, { method: "POST", body })
-            .then(() => load())
+            .then(() => {
+              failures = 0;
+              setNotice("");
+              return load();
+            })
             .catch((err: unknown) => {
               const message = err instanceof Error ? err.message : "Audio failed";
-              if (!message.toLowerCase().includes("no speech")) setError(message);
+              if (message.toLowerCase().includes("no speech")) return;
+              failures += 1;
+              if (failures >= 3) setError(message);
+              else setNotice("One audio clip was skipped. Listening continues.");
             })
             .finally(() => setPendingClips((count) => Math.max(0, count - 1)));
         }
@@ -280,6 +291,7 @@ export default function MeetingPage() {
       {meeting.error_message && <p className="mb-4 rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-800">{meeting.error_message}</p>}
       {meeting.report_stale && <p className="mb-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">The transcript changed after the report. Regenerate to refresh it.</p>}
       {error && <p className="mb-4 text-sm text-rose-700">{error}</p>}
+      {!error && notice && <p className="mb-4 text-sm text-stone-500">{notice}</p>}
 
       <div className="mb-4 flex flex-wrap gap-3 text-xs text-stone-500">
         {LEGEND.map(([name, text]) => (
@@ -359,8 +371,8 @@ export default function MeetingPage() {
                 </Button>
                 <p className="text-xs text-stone-500">
                   {recording
-                    ? `Listening through the laptop speaker. Voices are labeled Person A, Person B as they appear.${pendingClips > 0 ? " Translating…" : ""}`
-                    : "Play the meeting on the laptop speakers, then start the microphone. Click a Person A or Person B label to rename it."}
+                    ? `Listening through the laptop speaker. Each new voice gets its own label (Person A, Person B, …).${pendingClips > 0 ? " Translating…" : ""}`
+                    : "Play the meeting out loud on the laptop speakers (not headphones), then start the microphone. Rename voices in the Speakers panel."}
                 </p>
               </div>
             )}
@@ -375,6 +387,20 @@ export default function MeetingPage() {
         </div>
 
         <div className="space-y-6">
+          <Card>
+            <h2 className="font-serif text-xl">Speakers</h2>
+            <p className="mt-1 text-xs text-stone-500">
+              Type the real name next to each voice. New lines from that voice use the name automatically.
+            </p>
+            <div className="mt-3 space-y-2">
+              {speakerShares(detail.segments).map((row) => (
+                <SpeakerRow key={row.name} name={row.name} lines={row.lines} onRename={renameSpeaker} />
+              ))}
+              {detail.segments.length === 0 && (
+                <p className="text-sm text-stone-500">Voices appear here as Person A, Person B, and so on.</p>
+              )}
+            </div>
+          </Card>
           <Card>
             <h2 className="font-serif text-xl">Ask this meeting</h2>
             <form className="mt-3 space-y-2" onSubmit={askMeeting}>
@@ -526,8 +552,71 @@ function SpeakerName({ name, onRename }: { name: string; onRename: (from: string
   );
 }
 
+function SpeakerRow({
+  name,
+  lines,
+  onRename,
+}: {
+  name: string;
+  lines: number;
+  onRename: (from: string, to: string) => Promise<void>;
+}) {
+  const [value, setValue] = useState(name);
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState("");
+
+  useEffect(() => {
+    setValue(name);
+  }, [name]);
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    if (!value.trim() || value.trim() === name) return;
+    setSaving(true);
+    setFailed("");
+    try {
+      await onRename(name, value);
+    } catch (err) {
+      setFailed(err instanceof Error ? err.message : "Rename failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const changed = value.trim() !== "" && value.trim() !== name;
+  return (
+    <form onSubmit={save}>
+      <div className="flex items-center gap-2">
+        <TextInput
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          className="h-9"
+          aria-label={`Rename ${name}`}
+        />
+        <Button type="submit" variant={changed ? "primary" : "secondary"} disabled={saving || !changed} className="h-9 shrink-0 px-3">
+          {saving ? "Saving…" : "Rename"}
+        </Button>
+      </div>
+      <p className="mt-1 text-xs text-stone-400">
+        {lines} {lines === 1 ? "line" : "lines"}
+        {failed ? ` · ${failed}` : ""}
+      </p>
+    </form>
+  );
+}
+
 function applyLive(current: MeetingDetail | null, message: LiveMessage) {
   if (!current) return current;
+  if (message.type === "segment_update" && message.segment) {
+    const updated = message.segment;
+    const known = new Set(current.actions.map((item) => item.id));
+    return {
+      ...current,
+      meeting: { ...current.meeting, sentiment: message.sentiment || current.meeting.sentiment },
+      segments: current.segments.map((item) => (item.id === updated.id ? updated : item)),
+      actions: [...current.actions, ...(message.actions || []).filter((item) => !known.has(item.id))],
+    };
+  }
   if (message.type === "segment" && message.segment) {
     if (current.segments.some((item) => item.id === message.segment?.id)) return current;
     const names = new Set(current.meeting.participants);

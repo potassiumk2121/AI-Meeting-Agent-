@@ -1,10 +1,8 @@
 import logging
 
-import httpx
-
 from app.config import get_settings
 from app.errors import AppError
-from app.services.llm import parse_json_blob
+from app.services.llm import gemini_generate, parse_json_blob
 
 logger = logging.getLogger(__name__)
 
@@ -82,13 +80,8 @@ async def translate_lines(lines: list[str], language: str | None) -> tuple[list[
 
 
 async def _gemini_translate(lines: list[str], language: str | None) -> tuple[list[str], list[str]]:
-    settings = get_settings()
     translated: list[str] = []
     detected: list[str] = []
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{settings.gemini_model}:generateContent"
-    )
     for start in range(0, len(lines), 20):
         batch = lines[start : start + 20]
         numbered = "\n".join(f"{index + 1}. {line}" for index, line in enumerate(batch))
@@ -103,8 +96,7 @@ async def _gemini_translate(lines: list[str], language: str | None) -> tuple[lis
             "contents": [{"role": "user", "parts": [{"text": user}]}],
             "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
         }
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(url, params={"key": settings.gemini_api_key}, json=payload)
+        response = await gemini_generate(payload)
         if response.status_code >= 400:
             logger.warning("gemini translation failed with status %s", response.status_code)
             raise AppError("Gemini could not translate that line into English.", 502)

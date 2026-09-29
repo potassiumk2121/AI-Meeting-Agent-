@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from pathlib import Path
@@ -18,6 +19,7 @@ from app.models import (
     MeetingSummary,
     Participant,
     Risk,
+    SpeakerProfile,
     TranscriptSegment,
 )
 from app.schemas import (
@@ -37,7 +39,7 @@ from app.schemas import (
 )
 from app.services.connectors import ensure_transcript_subscription, pull_for_meeting
 from app.services.extract import actions_from_utterance, classify_sentiment
-from app.services.speech import transcribe_speakers
+from app.services.speech import VoiceRef, transcribe_speakers
 from app.services.pdf_report import ReportData, build_pdf
 from app.services.rag import reindex
 from app.services.summarize import analyze
@@ -392,6 +394,10 @@ async def ingest_audio(
     speaker: str,
     language: str | None,
 ) -> IngestOut:
+    meeting = await _get_meeting(session, meeting_id)
+    await _open_for_ingest(meeting)
+    profiles = await _speaker_profiles(session, meeting_id)
+    label_of = {profile.display_name.casefold(): profile.label for profile in profiles}
     recent_rows = (
         await session.execute(
             select(TranscriptSegment)
@@ -400,23 +406,72 @@ async def ingest_audio(
             .limit(4)
         )
     ).scalars().all()
-    recent = [(row.speaker_name, row.original_text) for row in reversed(recent_rows)]
-    known = list(dict.fromkeys(row.speaker_name for row in recent_rows))
+    recent = [
+        (label_of.get(row.speaker_name.casefold(), row.speaker_name), row.original_text)
+        for row in reversed(recent_rows)
+    ]
+    known = [profile.label for profile in profiles]
+    for name, _text in recent:
+        if name not in known:
+            known.append(name)
+    voices = [
+        VoiceRef(
+            label=profile.label,
+            description=profile.voice,
+            sample=profile.sample,
+            mime=profile.sample_mime or "audio/webm",
+        )
+        for profile in profiles
+    ]
     forced = speaker.strip()
-    turns = await transcribe_speakers(audio, content_type, known, recent)
-    if forced:
-        turns = [
-            type(turn)(speaker=forced, text=turn.text, language=turn.language, english=turn.english)
-            for turn in turns
-        ]
+    turns = await transcribe_speakers(audio, content_type, known, recent, voices)
     if not turns:
         raise AppError("No speech detected in that audio clip.", 422)
+    single_voice = len({turn.speaker for turn in turns}) == 1
+    mime = (content_type or "audio/webm").split(";")[0].strip() or "audio/webm"
+    async with _audio_locks.setdefault(meeting_id, asyncio.Lock()):
+        by_label = {profile.label: profile for profile in await _speaker_profiles(session, meeting_id)}
+        return await _store_turns(
+            session, meeting, turns, by_label, forced, single_voice, audio, mime, language
+        )
+
+
+async def _store_turns(
+    session: AsyncSession,
+    meeting: Meeting,
+    turns: list,
+    by_label: dict[str, SpeakerProfile],
+    forced: str,
+    single_voice: bool,
+    audio: bytes,
+    mime: str,
+    language: str | None,
+) -> IngestOut:
+    meeting_id = meeting.id
     last: IngestOut | None = None
     for turn in turns:
+        if forced:
+            name = forced
+        else:
+            profile = by_label.get(turn.speaker)
+            if profile is None and turn.speaker.startswith("Person "):
+                profile = SpeakerProfile(meeting_id=meeting_id, label=turn.speaker, display_name=turn.speaker)
+                session.add(profile)
+                by_label[turn.speaker] = profile
+            if profile is not None and not profile.voice and turn.voice:
+                profile.voice = turn.voice
+            if profile is not None and profile.sample is None and single_voice and len(audio) <= _MAX_VOICE_SAMPLE:
+                profile.sample = audio
+                profile.sample_mime = mime
+            name = profile.display_name if profile is not None else turn.speaker
+        previous = await _last_segment(session, meeting_id)
+        if _continues(previous, name):
+            last = await _append_to_segment(session, meeting, previous, turn.text, turn.english, turn.language or language)
+            continue
         last = await ingest_utterance(
             session,
             meeting_id,
-            speaker=turn.speaker,
+            speaker=name,
             text=turn.text,
             language=turn.language or language,
             timestamp_label=None,
@@ -424,6 +479,87 @@ async def ingest_audio(
             english=turn.english or None,
         )
     return last or IngestOut()
+
+
+_MAX_VOICE_SAMPLE = 400_000
+_audio_locks: dict[uuid.UUID, asyncio.Lock] = {}
+
+
+async def _speaker_profiles(session: AsyncSession, meeting_id: uuid.UUID) -> list[SpeakerProfile]:
+    rows = await session.execute(
+        select(SpeakerProfile).where(SpeakerProfile.meeting_id == meeting_id).order_by(SpeakerProfile.created_at)
+    )
+    return list(rows.scalars().all())
+
+
+async def _last_segment(session: AsyncSession, meeting_id: uuid.UUID) -> TranscriptSegment | None:
+    return (
+        await session.execute(
+            select(TranscriptSegment)
+            .where(TranscriptSegment.meeting_id == meeting_id)
+            .order_by(TranscriptSegment.sequence.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+def _continues(previous: TranscriptSegment | None, speaker: str) -> bool:
+    if previous is None or previous.source != "audio" or previous.speaker_name != speaker:
+        return False
+    text = previous.original_text.rstrip()
+    if not text or text[-1] in ".?!。？！।" or len(text) > 600:
+        return False
+    return (utcnow() - previous.created_at).total_seconds() < 15
+
+
+async def _append_to_segment(
+    session: AsyncSession,
+    meeting: Meeting,
+    segment: TranscriptSegment,
+    text: str,
+    english: str | None,
+    language: str | None,
+) -> IngestOut:
+    text = text.strip()
+    if english and english.strip():
+        addition = english.strip()
+    else:
+        addition, _detected = await to_english(text, language)
+    segment.original_text = f"{segment.original_text.rstrip()} {text}"[:8000]
+    segment.english_text = f"{segment.english_text.rstrip()} {addition}"[:8000]
+    segment.created_at = utcnow()
+    created: list[ActionItem] = []
+    for action in actions_from_utterance(segment.speaker_name, segment.english_text):
+        if await _action_exists(session, meeting.id, action.assignee, action.task):
+            continue
+        row = ActionItem(
+            meeting_id=meeting.id,
+            assignee_name=action.assignee,
+            description=action.task,
+            due_label=action.due_label,
+            source_segment_id=segment.id,
+            status="open",
+        )
+        session.add(row)
+        created.append(row)
+    await session.flush()
+    await _refresh_sentiment(session, meeting)
+    await session.commit()
+    result = IngestOut(
+        segment=_segment_out(segment),
+        actions=[_action_out(row) for row in created],
+        sentiment=meeting.sentiment,
+    )
+    await hub.broadcast(
+        str(meeting.id),
+        {
+            "type": "segment_update",
+            "segment": result.segment.model_dump(mode="json"),
+            "actions": [item.model_dump(mode="json") for item in result.actions],
+            "sentiment": result.sentiment,
+        },
+    )
+    return result
 
 
 async def rename_speaker(session: AsyncSession, meeting_id: uuid.UUID, from_name: str, to_name: str) -> MeetingDetail:
@@ -452,8 +588,18 @@ async def rename_speaker(session: AsyncSession, meeting_id: uuid.UUID, from_name
             select(ChatMessage).where(ChatMessage.meeting_id == meeting_id, ChatMessage.sender_name == source)
         )
     ).scalars().all()
-    if not segments and not actions and not chats:
+    profiles = (
+        await session.execute(
+            select(SpeakerProfile).where(
+                SpeakerProfile.meeting_id == meeting_id,
+                (SpeakerProfile.display_name == source) | (SpeakerProfile.label == source),
+            )
+        )
+    ).scalars().all()
+    if not segments and not actions and not chats and not profiles:
         raise AppError("That speaker is not in this meeting.", 404)
+    for profile in profiles:
+        profile.display_name = target
     source_person = (
         await session.execute(
             select(Participant).where(Participant.meeting_id == meeting_id, Participant.name == source)

@@ -42,6 +42,7 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
+    gemini_fallback_models: str = "gemini-3.8-flash,gemini-3-flash-preview,gemini-2.5-flash-lite,gemini-flash-lite-latest"
 
     speech_provider: str = "openai"
     azure_speech_key: str = ""
