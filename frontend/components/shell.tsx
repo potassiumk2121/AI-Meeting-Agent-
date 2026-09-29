@@ -40,7 +40,9 @@ export function Shell({ children }: { children: ReactNode }) {
       .then((data: PublicBrand) =>
         setBrand({
           company_name: data.company_name || "Development Monitors",
-          company_tagline: data.company_tagline || "AI Meeting Intelligence",
+          company_tagline: data.company_tagline?.toLowerCase().includes("ai meeting")
+            ? data.company_tagline
+            : "AI Meeting Intelligence",
           brand_color: data.brand_color?.trim() || "#102033",
         }),
       )
